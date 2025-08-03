@@ -1,4 +1,4 @@
 #!/bin/bash
 
 clear
-CompileDaemon -command="./main --dev" 
+CompileDaemon -command="./internly-bot --dev" 

@@ -8,7 +8,8 @@ const (
 )
 
 type Site struct {
-	URL                  string  `json:"string"`
+	Name                 string  `json:"name"`
+	URL                  string  `json:"url"`
 	RegexPattern         string  `json:"regexPattern"`
 	JobType              JobType `json:"type"`
 	CompanyGroup         int     `json:"companyGroup"`
