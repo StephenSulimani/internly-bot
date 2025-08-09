@@ -2,13 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/signal"
+	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stephensulimani/internly-bot/pkg"
 	"github.com/stephensulimani/internly-bot/pkg/models"
+	"github.com/stephensulimani/internly-bot/pkg/scraper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gorm.io/driver/sqlite"
@@ -108,7 +110,6 @@ func main() {
 		err := db.Unscoped().Where("guild_id = ?", e.Guild.ID).First(&guild).Error
 
 		if err != nil {
-			logger.Error(err)
 			if err == gorm.ErrRecordNotFound {
 				guild.GuildID = e.Guild.ID
 				err = db.Create(&guild).Error
@@ -146,6 +147,8 @@ func main() {
 
 	logger.Infof("Bot Started and Logged In As: %s#%s", discord.State.User.Username, discord.State.User.Discriminator)
 
+	go Scraper(config, discord, db, logger)
+
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, os.Interrupt)
 	<-sigch
@@ -153,5 +156,33 @@ func main() {
 	err = discord.Close()
 	if err != nil {
 		logger.Fatal(err)
+	}
+}
+
+func Scraper(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.SugaredLogger) {
+	const workers = 5
+	for true {
+		jobs := make(chan *models.Site, workers)
+		var wg sync.WaitGroup
+
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ch := range jobs {
+					_, err := scraper.Scrape(ch, db, nil, log)
+					if err != nil {
+						log.Error(err)
+					}
+				}
+			}()
+		}
+
+		for _, s := range cfg.Sites {
+			jobs <- &s
+		}
+		close(jobs)
+		wg.Wait()
+		time.Sleep(cfg.PollTime_d)
 	}
 }

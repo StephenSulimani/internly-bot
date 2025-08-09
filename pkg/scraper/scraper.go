@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/stephensulimani/internly-bot/pkg/models"
@@ -66,7 +67,7 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 
 	jobs := []models.Job{}
 
-	for _, match := range matches {
+	for i, match := range matches {
 		companyGroup := 1
 		roleGroup := 2
 		locationGroup := 3
@@ -97,6 +98,20 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 			ApplicationLink: match[applicationLinkGroup],
 			FirstSeen:       time.Now(),
 		}
+
+		prev := i - 1
+		for job.Company == "" {
+			job.Company = matches[prev][companyGroup]
+			prev -= 1
+		}
+
+		re := regexp.MustCompile(`<[^>]*>`)
+		cleanedString := re.ReplaceAllString(job.Location, " ")
+
+		cleanedString = strings.ReplaceAll(cleanedString, "*", "")
+		cleanedString = strings.TrimSpace(cleanedString)
+
+		job.Location = cleanedString
 
 		err = db.Save(&job).Error
 

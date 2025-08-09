@@ -13,7 +13,7 @@ type Config struct {
 	DatabaseName string        `json:"dbName"`
 	BotToken     string        `json:"discordToken"`
 	Sites        []models.Site `json:"sites"`
-	pollTime     time.Duration
+	PollTime_d   time.Duration
 	PollTime     string `json:"pollTime"`
 }
 
@@ -35,7 +35,7 @@ func (c *Config) Validate() error {
 	}
 
 	if c.PollTime == "" {
-		c.pollTime = 2 * time.Hour
+		c.PollTime_d = 2 * time.Hour
 	} else {
 		regex := regexp.MustCompile(`(.*?)([a-zA-Z]+)`)
 
@@ -43,7 +43,7 @@ func (c *Config) Validate() error {
 
 		if len(match) == 3 {
 			var err error
-			c.pollTime, err = time.ParseDuration(match[1] + match[2])
+			c.PollTime_d, err = time.ParseDuration(match[1] + match[2])
 			if err != nil {
 				return err
 			}
