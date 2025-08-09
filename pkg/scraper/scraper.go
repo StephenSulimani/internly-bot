@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -12,6 +13,10 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+type Scraper interface {
+	Scrape() ([]models.Job, error)
+}
 
 // Scrape first scrapes the site and parses the page for relevant information.
 // It then creates a new Job and attempts to add it to the database.
@@ -93,13 +98,27 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 		}
 
 		job := models.Job{
-			Source:          s.URL,
+			SourceURL:       s.URL,
+			Source:          s.Name,
 			JobType:         s.JobType,
 			Company:         match[companyGroup],
 			Role:            match[roleGroup],
 			Location:        match[locationGroup],
 			ApplicationLink: match[applicationLinkGroup],
 			FirstSeen:       time.Now(),
+		}
+
+		if s.AgeGroup != 0 {
+			// if strings.Contains(match[s.AgeGroup], "mo") {
+			// 	match[s.AgeGroup] = strings.ReplaceAll(match[s.AgeGroup], "mo", "M")
+			// }
+			duration, err := ParseDuration(match[s.AgeGroup])
+
+			if err == nil {
+				job.FirstSeen = time.Now().Add(-duration)
+			} else {
+				fmt.Println(err)
+			}
 		}
 
 		next := i + 1
@@ -120,9 +139,14 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 
 		if err != nil {
 			if err == gorm.ErrDuplicatedKey {
-				log.Infof("Job already exists: %s", job.ApplicationLink)
 				continue
 			}
+			log.Error(err)
+		}
+
+		_, err := job.SourceLogo(db)
+		if err != nil {
+			log.Error(err)
 		}
 
 		if jobEvent != nil {
@@ -134,4 +158,52 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 
 	return jobs, nil
 
+}
+
+// ParseDuration parses a duration string.
+// examples: "10d", "-1.5w" or "3Y4M5d".
+// Add time units are "d"="D", "w"="W", "M", "y"="Y".
+func ParseDuration(s string) (time.Duration, error) {
+	neg := false
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		s = s[1:]
+	}
+
+	re := regexp.MustCompile(`(\d*\.\d+|\d+)[^\d]*`)
+	unitMap := map[string]time.Duration{
+		"d":  24,
+		"D":  24,
+		"w":  7 * 24,
+		"W":  7 * 24,
+		"M":  30 * 24,
+		"mo": 30 * 24,
+		"y":  365 * 24,
+		"Y":  365 * 24,
+	}
+
+	strs := re.FindAllString(s, -1)
+	var sumDur time.Duration
+	for _, str := range strs {
+		var _hours time.Duration = 1
+		for unit, hours := range unitMap {
+			if strings.Contains(str, unit) {
+				str = strings.ReplaceAll(str, unit, "h")
+				_hours = hours
+				break
+			}
+		}
+
+		dur, err := time.ParseDuration(str)
+		if err != nil {
+			return 0, err
+		}
+
+		sumDur += dur * _hours
+	}
+
+	if neg {
+		sumDur = -sumDur
+	}
+	return sumDur, nil
 }

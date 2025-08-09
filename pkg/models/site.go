@@ -16,4 +16,5 @@ type Site struct {
 	RoleGroup            int     `json:"roleGroup"`
 	LocationGroup        int     `json:"locationGroup"`
 	ApplicationLinkGroup int     `json:"applicationLinkGroup"`
+	AgeGroup             int     `json:"ageGroup"`
 }

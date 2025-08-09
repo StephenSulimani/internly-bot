@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/stephensulimani/internly-bot/pkg/commands"
 	"github.com/stephensulimani/internly-bot/pkg/models"
 	"github.com/stephensulimani/internly-bot/pkg/scraper"
+	"github.com/stephensulimani/internly-bot/pkg/scraper/sites"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gorm.io/driver/sqlite"
@@ -89,7 +91,8 @@ func main() {
 	}
 
 	db, err := gorm.Open(sqlite.Open(config.DatabaseName), &gorm.Config{
-		Logger: glogger.Default.LogMode(glogger.Silent),
+		Logger:         glogger.Default.LogMode(glogger.Silent),
+		TranslateError: true,
 	})
 	if err != nil {
 		logger.Fatal(err)
@@ -185,8 +188,11 @@ func main() {
 
 func Scraper(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.SugaredLogger) {
 	const workers = 5
+	scrapers := []scraper.Scraper{
+		sites.NewSimplifyJobs(log, db, nil),
+	}
 	for true {
-		jobs := make(chan *models.Site, workers)
+		jobs := make(chan *scraper.Scraper, workers)
 		var wg sync.WaitGroup
 
 		for range workers {
@@ -194,7 +200,7 @@ func Scraper(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.
 			go func() {
 				defer wg.Done()
 				for ch := range jobs {
-					_, err := scraper.Scrape(ch, db, nil, log)
+					_, err := (*ch).Scrape()
 					if err != nil {
 						log.Error(err)
 					}
@@ -202,7 +208,7 @@ func Scraper(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.
 			}()
 		}
 
-		for _, s := range cfg.Sites {
+		for _, s := range scrapers {
 			jobs <- &s
 		}
 		close(jobs)
@@ -237,12 +243,30 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 					jobTypes := []string{"NEW_GRAD", "INTERN"}
 
 					for _, jobType := range jobTypes {
+						if jobType == "NEW_GRAD" && ch.NewGradChannelID == "" {
+							continue
+						}
+
+						if jobType == "INTERN" && ch.InternChannelID == "" {
+							continue
+						}
+
+						var channelId string
+
+						switch jobType {
+						case "NEW_GRAD":
+							channelId = ch.NewGradChannelID
+						case "INTERN":
+							channelId = ch.InternChannelID
+						}
+
 						var jobs []models.Job
 						err := db.Table("jobs").
 							Select("jobs.*").
 							Joins("LEFT JOIN sent_jobs ON jobs.id = sent_jobs.job_id AND sent_jobs.guild_id = ?", ch.ID).
-							Where("sent_jobs.job_id IS NULL AND jobs.job_type = ?", jobType).
-							Limit(50).
+							Where("sent_jobs.job_id IS NULL AND jobs.job_type = ? AND jobs.first_seen > ?", jobType, time.Now().Add(-30*24*time.Hour)).
+							Limit(250).
+							Order("jobs.first_seen ASC").
 							Find(&jobs).Error
 
 						if err != nil {
@@ -253,10 +277,22 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 						log.Infof("Found %d %s jobs for guild: %s", len(jobs), jobType, ch.GuildID)
 
 						for _, job := range jobs {
-							// log.Infof("Sending Job: %s | %s | %s", job.Role, job.Company, job.ApplicationLink)
+
+							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
+							if err != nil {
+								log.Error(err)
+								if jobType == "NEW_GRAD" {
+									ch.NewGradChannelID = ""
+									db.Save(&ch)
+								} else if jobType == "INTERN" {
+									ch.InternChannelID = ""
+									db.Save(&ch)
+								}
+								break
+							}
 
 							sentJob := models.SentJob{
-								MessageId: "",
+								MessageId: msg.ID,
 								GuildID:   ch.ID,
 								JobID:     job.ID,
 							}
@@ -267,6 +303,7 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 								log.Error(err)
 								continue
 							}
+							time.Sleep(500 * time.Millisecond)
 						}
 
 					}
@@ -279,5 +316,40 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 		}
 		close(guildCh)
 		wg.Wait()
+	}
+}
+
+func GenerateMessage(job *models.Job) *discordgo.MessageSend {
+	return &discordgo.MessageSend{
+		Embeds: []*discordgo.MessageEmbed{
+			{
+				Title: job.Company,
+				URL:   job.ApplicationLink,
+				Color: 0x152949,
+				Thumbnail: &discordgo.MessageEmbedThumbnail{
+					URL: job.Logo,
+				},
+				Fields: []*discordgo.MessageEmbedField{
+					{Name: "Role", Value: job.Role},
+					{Name: "Location", Value: job.Location},
+				},
+				Description: fmt.Sprintf("First Seen: <t:%d:R>", job.FirstSeen.Unix()),
+				Footer: &discordgo.MessageEmbedFooter{
+					Text: fmt.Sprintf("Source: %s", job.Source),
+				},
+			},
+		},
+		Components: []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.Button{
+						Label:    "Apply",
+						Style:    discordgo.LinkButton,
+						URL:      job.ApplicationLink,
+						Disabled: false,
+					},
+				},
+			},
+		},
 	}
 }
