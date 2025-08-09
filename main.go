@@ -9,6 +9,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/stephensulimani/internly-bot/pkg"
+	"github.com/stephensulimani/internly-bot/pkg/commands"
 	"github.com/stephensulimani/internly-bot/pkg/models"
 	"github.com/stephensulimani/internly-bot/pkg/scraper"
 	"go.uber.org/zap"
@@ -139,6 +140,20 @@ func main() {
 		logger.Infof("Guild Deleted: %s | %s", e.Guild.Name, e.Guild.ID)
 	})
 
+	commandHandlers := map[string]commands.CommandExecutor{}
+
+	registerCommand, registerCommandHandler := commands.RegisterCommand(db)
+
+	commandHandlers[registerCommand.Name] = registerCommandHandler
+
+	registeredCommands := []*discordgo.ApplicationCommand{registerCommand}
+
+	discord.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
+			h(s, i)
+		}
+	})
+
 	err = discord.Open()
 
 	if err != nil {
@@ -147,7 +162,14 @@ func main() {
 
 	logger.Infof("Bot Started and Logged In As: %s#%s", discord.State.User.Username, discord.State.User.Discriminator)
 
-	go Scraper(config, discord, db, logger)
+	for _, h := range registeredCommands {
+		_, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", h)
+		if err != nil {
+			logger.Panicf("Cannot create '%v' command: %v", h.Name, err)
+		}
+	}
+
+	// go Scraper(config, discord, db, logger)
 
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, os.Interrupt)
