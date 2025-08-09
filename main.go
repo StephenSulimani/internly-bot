@@ -169,7 +169,9 @@ func main() {
 		}
 	}
 
-	// go Scraper(config, discord, db, logger)
+	go Scraper(config, discord, db, logger)
+
+	go Sender(config, discord, db, logger)
 
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, os.Interrupt)
@@ -206,5 +208,76 @@ func Scraper(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.
 		close(jobs)
 		wg.Wait()
 		time.Sleep(cfg.PollTime_d)
+	}
+}
+
+func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.SugaredLogger) {
+	const workers = 3
+	const delay = 10 * time.Second
+	for true {
+		time.Sleep(delay)
+		var guilds []models.Guild
+		err := db.Where("deleted_at is NULL").Find(&guilds).Error
+
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
+		log.Infof("Found %d guilds", len(guilds))
+
+		guildCh := make(chan *models.Guild, workers)
+		var wg sync.WaitGroup
+
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ch := range guildCh {
+					jobTypes := []string{"NEW_GRAD", "INTERN"}
+
+					for _, jobType := range jobTypes {
+						var jobs []models.Job
+						err := db.Table("jobs").
+							Select("jobs.*").
+							Joins("LEFT JOIN sent_jobs ON jobs.id = sent_jobs.job_id AND sent_jobs.guild_id = ?", ch.ID).
+							Where("sent_jobs.job_id IS NULL AND jobs.job_type = ?", jobType).
+							Limit(50).
+							Find(&jobs).Error
+
+						if err != nil {
+							log.Error(err)
+							continue
+						}
+
+						log.Infof("Found %d %s jobs for guild: %s", len(jobs), jobType, ch.GuildID)
+
+						for _, job := range jobs {
+							// log.Infof("Sending Job: %s | %s | %s", job.Role, job.Company, job.ApplicationLink)
+
+							sentJob := models.SentJob{
+								MessageId: "",
+								GuildID:   ch.ID,
+								JobID:     job.ID,
+							}
+
+							err = db.Save(&sentJob).Error
+
+							if err != nil {
+								log.Error(err)
+								continue
+							}
+						}
+
+					}
+
+				}
+			}()
+		}
+		for _, g := range guilds {
+			guildCh <- &g
+		}
+		close(guildCh)
+		wg.Wait()
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,6 +68,8 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 
 	jobs := []models.Job{}
 
+	slices.Reverse(matches)
+
 	for i, match := range matches {
 		companyGroup := 1
 		roleGroup := 2
@@ -99,10 +102,10 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 			FirstSeen:       time.Now(),
 		}
 
-		prev := i - 1
+		next := i + 1
 		for job.Company == "" {
-			job.Company = matches[prev][companyGroup]
-			prev -= 1
+			job.Company = matches[next][companyGroup]
+			next += 1
 		}
 
 		re := regexp.MustCompile(`<[^>]*>`)
