@@ -23,7 +23,6 @@ import (
 
 func LoadConfig(config_file string) (*pkg.Config, error) {
 	config_f, err := os.Open(config_file)
-
 	if err != nil {
 		return nil, err
 	}
@@ -32,19 +31,16 @@ func LoadConfig(config_file string) (*pkg.Config, error) {
 
 	config := &pkg.Config{}
 	err = json.NewDecoder(config_f).Decode(config)
-
 	if err != nil {
 		return nil, err
 	}
 
 	err = config.Validate()
-
 	if err != nil {
 		return nil, err
 	}
 
 	return config, nil
-
 }
 
 func main() {
@@ -76,7 +72,6 @@ func main() {
 	}
 
 	log, err := zapConfig.Build()
-
 	if err != nil {
 		panic(err)
 	}
@@ -85,7 +80,6 @@ func main() {
 	logger := log.Sugar()
 
 	config, err := LoadConfig(config_file)
-
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -98,10 +92,9 @@ func main() {
 		logger.Fatal(err)
 	}
 
-	db.AutoMigrate(&models.Job{}, &models.Guild{}, &models.SentJob{})
+	db.AutoMigrate(&models.Job{}, &models.Guild{}, &models.SentJob{}, &models.Subscription{})
 
 	discord, err := discordgo.New("Bot " + config.BotToken)
-
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -117,7 +110,6 @@ func main() {
 			if err == gorm.ErrRecordNotFound {
 				guild.GuildID = e.Guild.ID
 				err = db.Create(&guild).Error
-
 				if err != nil {
 					logger.Error(err)
 					return
@@ -128,7 +120,6 @@ func main() {
 			if guild.DeletedAt != nil {
 				guild.DeletedAt = nil
 				err = db.Save(&guild).Error
-
 				if err != nil {
 					logger.Error(err)
 					return
@@ -158,7 +149,6 @@ func main() {
 	})
 
 	err = discord.Open()
-
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -224,7 +214,6 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 		time.Sleep(delay)
 		var guilds []models.Guild
 		err := db.Where("deleted_at is NULL").Find(&guilds).Error
-
 		if err != nil {
 			log.Error(err)
 			continue
@@ -268,7 +257,6 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 							Limit(250).
 							Order("jobs.first_seen ASC").
 							Find(&jobs).Error
-
 						if err != nil {
 							log.Error(err)
 							continue
@@ -281,10 +269,11 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
 							if err != nil {
 								log.Error(err)
-								if jobType == "NEW_GRAD" {
+								switch jobType {
+								case string(models.NEW_GRAD):
 									ch.NewGradChannelID = ""
 									db.Save(&ch)
-								} else if jobType == "INTERN" {
+								case string(models.INTERN):
 									ch.InternChannelID = ""
 									db.Save(&ch)
 								}
@@ -298,7 +287,6 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 							}
 
 							err = db.Save(&sentJob).Error
-
 							if err != nil {
 								log.Error(err)
 								continue
