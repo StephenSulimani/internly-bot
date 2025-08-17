@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,17 +135,22 @@ func main() {
 		logger.Infof("Guild Deleted: %s | %s", e.Guild.Name, e.Guild.ID)
 	})
 
-	commandHandlers := map[string]commands.CommandExecutor{}
+	availableCommands := []commands.Command{
+		commands.ConfigureCommand(db),
+		commands.SubscribeCommand(logger, db),
+		commands.SubscriptionsCommand(logger, db),
+		commands.UnsubscribeCommand(logger, db),
+		commands.HelpCommand(),
+	}
 
-	registerCommand, registerCommandHandler := commands.RegisterCommand(db)
-
-	commandHandlers[registerCommand.Name] = registerCommandHandler
-
-	registeredCommands := []*discordgo.ApplicationCommand{registerCommand}
+	commandHandlers := make(map[string]commands.Command)
+	for _, v := range availableCommands {
+		commandHandlers[v.Command.Name] = v
+	}
 
 	discord.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
-			h(s, i)
+			h.Execute(s, i)
 		}
 	})
 
@@ -155,16 +161,18 @@ func main() {
 
 	logger.Infof("Bot Started and Logged In As: %s#%s", discord.State.User.Username, discord.State.User.Discriminator)
 
-	for _, h := range registeredCommands {
-		_, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", h)
+	for _, h := range availableCommands {
+		_, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", h.Command)
 		if err != nil {
-			logger.Panicf("Cannot create '%v' command: %v", h.Name, err)
+			logger.Panicf("Cannot create '%v' command: %v", h.Command.Name, err)
 		}
 	}
 
 	go Scraper(config, discord, db, logger)
 
 	go Sender(config, discord, db, logger)
+
+	go Subscriptions(config, discord, db, logger)
 
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, os.Interrupt)
@@ -303,6 +311,150 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 			guildCh <- &g
 		}
 		close(guildCh)
+		wg.Wait()
+	}
+}
+
+func Subscriptions(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.SugaredLogger) {
+	const workers = 3
+	const delay = 10 * time.Second
+	for true {
+		time.Sleep(delay)
+		var subscriptions []models.Subscription
+		err := db.Where("deleted_at is NULL").Find(&subscriptions).Error
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
+		log.Infof("Found %d subscriptions", len(subscriptions))
+
+		subCh := make(chan *models.Subscription, workers)
+		var wg sync.WaitGroup
+
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ch := range subCh {
+
+					locationsQuery := ""
+
+					for i, location := range ch.Locations {
+						if location == "" {
+							break
+						}
+						if i == 0 {
+							locationsQuery += "("
+						}
+						locationsQuery += fmt.Sprintf("location LIKE '%%%s%%'", location)
+						if i == len(ch.Locations)-1 {
+							locationsQuery += ")"
+						} else {
+							locationsQuery += " OR "
+						}
+					}
+
+					companiesQuery := ""
+
+					for i, company := range ch.Companies {
+						if company == "" {
+							break
+						}
+						if i == 0 {
+							companiesQuery += "("
+						}
+						companiesQuery += fmt.Sprintf("company LIKE '%%%s%%'", company)
+						if i == len(ch.Companies)-1 {
+							companiesQuery += ")"
+						} else {
+							companiesQuery += " OR "
+						}
+					}
+
+					rolesQuery := ""
+
+					for i, role := range ch.Roles {
+						if role == "" {
+							break
+						}
+						if i == 0 {
+							rolesQuery += "("
+						}
+						rolesQuery += fmt.Sprintf("role LIKE '%%%s%%'", role)
+						if i == len(ch.Roles)-1 {
+							rolesQuery += ")"
+						} else {
+							rolesQuery += " OR "
+						}
+					}
+
+					queries := []string{}
+
+					if locationsQuery != "" {
+						queries = append(queries, locationsQuery)
+					}
+
+					if companiesQuery != "" {
+						queries = append(queries, companiesQuery)
+					}
+
+					if rolesQuery != "" {
+						queries = append(queries, rolesQuery)
+					}
+
+					query := strings.Join(queries, " AND ")
+
+					var jobs []models.Job
+					err := db.Table("jobs").
+						Select("jobs.*").
+						Joins("LEFT JOIN sent_jobs ON jobs.id = sent_jobs.job_id AND sent_jobs.guild_id = ?", ch.ID).
+						Where("sent_jobs.job_id IS NULL AND jobs.job_type = ? AND jobs.first_seen > ? AND jobs.created_at > ?", ch.JobType, time.Now().Add(-30*24*time.Hour), ch.CreatedAt).
+						Where(query).
+						Limit(250).
+						Order("jobs.first_seen ASC").
+						Find(&jobs).Error
+					if err != nil {
+						log.Error(err)
+						continue
+					}
+
+					log.Infof("Found %d %s jobs for User: %s", len(jobs), ch.JobType, ch.UserID)
+					user_chan, err := discord.UserChannelCreate(ch.UserID)
+					if err != nil {
+						log.Errorf("Error creating user channel with ID %s: %v", ch.UserID, err)
+						continue
+					}
+
+					for _, job := range jobs {
+
+						msg, err := discord.ChannelMessageSendComplex(user_chan.ID, GenerateMessage(&job))
+						if err != nil {
+							log.Error(err)
+							break
+						}
+
+						sentJob := models.SentJob{
+							MessageId: msg.ID,
+							GuildID:   ch.ID,
+							JobID:     job.ID,
+						}
+
+						err = db.Save(&sentJob).Error
+						if err != nil {
+							log.Error(err)
+							continue
+						}
+						time.Sleep(500 * time.Millisecond)
+					}
+
+				}
+			}()
+		}
+		for _, s := range subscriptions {
+			subCh <- &s
+		}
+		close(subCh)
 		wg.Wait()
 	}
 }

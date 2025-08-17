@@ -2,5 +2,5 @@ services:
   internly:
     build: .
     volumes:
-      - ./docker-internly.db:/app/internly.db
+      - ./internly.db:/app/internly.db
       - ./config.json:/app/config.json

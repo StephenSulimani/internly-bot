@@ -9,9 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-type CommandExecutor func(s *discordgo.Session, i *discordgo.InteractionCreate)
-
-func RunRegisterCommand(db *gorm.DB) CommandExecutor {
+func RunConfigureCommand(db *gorm.DB) CommandExecutor {
 	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -45,7 +43,6 @@ func RunRegisterCommand(db *gorm.DB) CommandExecutor {
 				})
 				return
 			}
-
 		} else {
 			guild.InternChannelID = i.ApplicationCommandData().Options[0].ChannelValue(s).ID
 			guild.NewGradChannelID = i.ApplicationCommandData().Options[1].ChannelValue(s).ID
@@ -65,30 +62,32 @@ func RunRegisterCommand(db *gorm.DB) CommandExecutor {
 				},
 			},
 		})
-
 	}
-
 }
 
-func RegisterCommand(db *gorm.DB) (*discordgo.ApplicationCommand, CommandExecutor) {
+func ConfigureCommand(db *gorm.DB) Command {
 	var manageChannels int64 = discordgo.PermissionManageChannels
-	return &discordgo.ApplicationCommand{
-		Name:                     "configure",
-		Description:              "Configure the bot",
-		DefaultMemberPermissions: &manageChannels,
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:        discordgo.ApplicationCommandOptionChannel,
-				Name:        "intern-channel",
-				Description: "The channel for internships",
-				Required:    true,
-			},
-			{
-				Type:        discordgo.ApplicationCommandOptionChannel,
-				Name:        "new-grad-channel",
-				Description: "The channel for new-grad positions",
-				Required:    true,
+	return Command{
+		Command: &discordgo.ApplicationCommand{
+			Name:                     "configure",
+			Description:              "Configure the bot",
+			DefaultMemberPermissions: &manageChannels,
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionChannel,
+					Name:        "intern-channel",
+					Description: "The channel for internships",
+					Required:    true,
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionChannel,
+					Name:        "new-grad-channel",
+					Description: "The channel for new-grad positions",
+					Required:    true,
+				},
 			},
 		},
-	}, RunRegisterCommand(db)
+		Executor:   RunConfigureCommand(db),
+		GuildsOnly: true,
+	}
 }
