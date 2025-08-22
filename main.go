@@ -276,6 +276,10 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 
 							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
 							if err != nil {
+								if err.(*discordgo.RESTError).Message.Code == discordgo.ErrCodeInvalidFormBody {
+									log.Errorf("Error sending job: %s to channelID: %s", job.ID, channelId)
+									continue
+								}
 								log.Error(err)
 								switch jobType {
 								case string(models.NEW_GRAD):
