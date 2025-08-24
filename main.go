@@ -276,20 +276,36 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 
 							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
 							if err != nil {
-								if err.(*discordgo.RESTError).Message.Code == discordgo.ErrCodeInvalidFormBody {
+								errCode := err.(*discordgo.RESTError).Message.Code
+								if errCode == discordgo.ErrCodeInvalidFormBody {
+									// This error occurs when there is some issue with the Embed, meaning something regarding the
+									// job is malformed.
+									sentJob := models.SentJob{
+										GuildID: ch.ID,
+										JobID:   job.ID,
+										Error:   true,
+									}
+									err = db.Save(&sentJob).Error
+									if err != nil {
+										log.Error(err)
+									}
 									log.Errorf("Error sending job: %s to channelID: %s", job.ID, channelId)
 									continue
 								}
-								log.Error(err)
-								switch jobType {
-								case string(models.NEW_GRAD):
-									ch.NewGradChannelID = ""
-									db.Save(&ch)
-								case string(models.INTERN):
-									ch.InternChannelID = ""
-									db.Save(&ch)
+								if errCode == discordgo.ErrCodeUnknownChannel {
+									log.Errorf("Error sending job: %s to channelID: %s. The channel no longer exists.", job.ID, channelId)
+									switch jobType {
+									case string(models.NEW_GRAD):
+										ch.NewGradChannelID = ""
+										db.Save(&ch)
+									case string(models.INTERN):
+										ch.InternChannelID = ""
+										db.Save(&ch)
+									}
+									continue
 								}
-								break
+								log.Error(err)
+								continue
 							}
 
 							sentJob := models.SentJob{

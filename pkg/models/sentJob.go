@@ -13,6 +13,7 @@ type SentJob struct {
 	MessageId string    `json:"messageId"`
 	GuildID   uuid.UUID `gorm:"not null" json:"guildId"`
 	JobID     uuid.UUID `gorm:"not null" json:"jobId"`
+	Error     bool      `gorm:"default:false" json:"error"`
 
 	Guild Guild `gorm:"foreignKey:GuildID"`
 	Job   Job   `gorm:"foreignKey:JobID"`
@@ -24,5 +25,6 @@ type SentJob struct {
 
 func (s *SentJob) BeforeCreate(tx *gorm.DB) (err error) {
 	s.ID = uuid.New()
+	s.Error = false
 	return
 }
