@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -85,13 +86,29 @@ func main() {
 		logger.Fatal(err)
 	}
 
-	db, err := gorm.Open(sqlite.Open(config.DatabaseName), &gorm.Config{
+	if err := os.MkdirAll(filepath.Dir(config.DatabaseName), 0o755); err != nil {
+		logger.Fatal(err)
+	}
+
+	dsn := fmt.Sprintf(
+		"file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)",
+		config.DatabaseName,
+	)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger:         glogger.Default.LogMode(glogger.Silent),
 		TranslateError: true,
 	})
 	if err != nil {
 		logger.Fatal(err)
 	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxLifetime(0)
 
 	db.AutoMigrate(&models.Job{}, &models.Guild{}, &models.SentJob{}, &models.Subscription{})
 
@@ -273,51 +290,50 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 						log.Infof("Found %d %s jobs for guild: %s", len(jobs), jobType, ch.GuildID)
 
 						for _, job := range jobs {
+							sentJob := models.SentJob{
+								GuildID: ch.ID,
+								JobID:   job.ID,
+							}
+							if err := db.Create(&sentJob).Error; err != nil {
+								log.Error(err)
+								continue
+							}
 
 							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
 							if err != nil {
-								errCode := err.(*discordgo.RESTError).Message.Code
-								if errCode == discordgo.ErrCodeInvalidFormBody {
-									// This error occurs when there is some issue with the Embed, meaning something regarding the
-									// job is malformed.
-									sentJob := models.SentJob{
-										GuildID: ch.ID,
-										JobID:   job.ID,
-										Error:   true,
+								if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Message != nil {
+									errCode := restErr.Message.Code
+									if errCode == discordgo.ErrCodeInvalidFormBody {
+										if err := db.Model(&sentJob).Update("error", true).Error; err != nil {
+											log.Error(err)
+										}
+										log.Errorf("Error sending job: %s to channelID: %s", job.ID, channelId)
+										continue
 									}
-									err = db.Save(&sentJob).Error
-									if err != nil {
-										log.Error(err)
+									if errCode == discordgo.ErrCodeUnknownChannel {
+										log.Errorf("Error sending job: %s to channelID: %s. The channel no longer exists.", job.ID, channelId)
+										db.Unscoped().Delete(&sentJob)
+										switch jobType {
+										case string(models.NEW_GRAD):
+											ch.NewGradChannelID = ""
+											db.Save(&ch)
+										case string(models.INTERN):
+											ch.InternChannelID = ""
+											db.Save(&ch)
+										}
+										break
 									}
-									log.Errorf("Error sending job: %s to channelID: %s", job.ID, channelId)
-									continue
-								}
-								if errCode == discordgo.ErrCodeUnknownChannel {
-									log.Errorf("Error sending job: %s to channelID: %s. The channel no longer exists.", job.ID, channelId)
-									switch jobType {
-									case string(models.NEW_GRAD):
-										ch.NewGradChannelID = ""
-										db.Save(&ch)
-									case string(models.INTERN):
-										ch.InternChannelID = ""
-										db.Save(&ch)
-									}
-									continue
 								}
 								log.Error(err)
+								// Retryable failure — drop the claim so the next cycle can try again.
+								if err := db.Unscoped().Delete(&sentJob).Error; err != nil {
+									log.Error(err)
+								}
 								continue
 							}
 
-							sentJob := models.SentJob{
-								MessageId: msg.ID,
-								GuildID:   ch.ID,
-								JobID:     job.ID,
-							}
-
-							err = db.Save(&sentJob).Error
-							if err != nil {
+							if err := db.Model(&sentJob).Update("message_id", msg.ID).Error; err != nil {
 								log.Error(err)
-								continue
 							}
 							time.Sleep(500 * time.Millisecond)
 						}
@@ -447,23 +463,28 @@ func Subscriptions(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log
 					}
 
 					for _, job := range jobs {
+						// Claim before sending so a failed DB write can't cause resends.
+						sentJob := models.SentJob{
+							GuildID: ch.ID,
+							JobID:   job.ID,
+						}
+						if err := db.Create(&sentJob).Error; err != nil {
+							log.Error(err)
+							continue
+						}
 
 						msg, err := discord.ChannelMessageSendComplex(user_chan.ID, GenerateMessage(&job))
 						if err != nil {
 							log.Error(err)
+							// Retryable failure — drop the claim so the next cycle can try again.
+							if err := db.Unscoped().Delete(&sentJob).Error; err != nil {
+								log.Error(err)
+							}
 							break
 						}
 
-						sentJob := models.SentJob{
-							MessageId: msg.ID,
-							GuildID:   ch.ID,
-							JobID:     job.ID,
-						}
-
-						err = db.Save(&sentJob).Error
-						if err != nil {
+						if err := db.Model(&sentJob).Update("message_id", msg.ID).Error; err != nil {
 							log.Error(err)
-							continue
 						}
 						time.Sleep(500 * time.Millisecond)
 					}

@@ -1,27 +1,22 @@
-FROM golang:1.24.5 AS builder
+FROM golang:1.24.5-alpine AS builder
+
+RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
-
 RUN go mod download
 
 COPY . .
 
-RUN go build -o internly .
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o internly .
 
-FROM debian:bookworm-slim
+FROM alpine:3.21
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libc6 \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && apt-get install -y ca-certificates
+RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
 COPY --from=builder /app/internly .
-
-RUN chmod +x ./internly
 
 CMD ["./internly"]

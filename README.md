@@ -17,13 +17,16 @@ Use the Dockerfile and the Docker Compose script to spin up a new instance easil
 First, create a `config.json` file and follow the template:
 
 ```json
-  {
-    "discordToken": "<token>",
-    "pollTime": "1h"
+{
+  "discordToken": "<token>",
+  "pollTime": "1h",
+  "dbName": "data/internly.db"
 }
 ```
 
 Then run: `docker compose up -d`
+
+The database is stored under `./data` on the host (created automatically). If you previously bind-mounted `./internly.db` and Docker created a directory there, remove it with `rm -rf internly.db` before starting.
 
 ## Commands
 

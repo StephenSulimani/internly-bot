@@ -19,12 +19,10 @@ func (c *Config) Validate() error {
 		return errors.New("missing bot token")
 	}
 
-	if !strings.HasSuffix(c.DatabaseName, ".db") {
-		c.DatabaseName += ".db"
-	}
-
 	if c.DatabaseName == "" {
-		c.DatabaseName = "internly.db"
+		c.DatabaseName = "data/internly.db"
+	} else if !strings.HasSuffix(c.DatabaseName, ".db") {
+		c.DatabaseName += ".db"
 	}
 
 	if c.PollTime == "" {
