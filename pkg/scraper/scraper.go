@@ -142,11 +142,7 @@ func Scrape(s *models.Site, db *gorm.DB, jobEvent *chan models.Job, log *zap.Sug
 				continue
 			}
 			log.Error(err)
-		}
-
-		_, err := job.SourceLogo(db)
-		if err != nil {
-			log.Error(err)
+			continue
 		}
 
 		if jobEvent != nil {

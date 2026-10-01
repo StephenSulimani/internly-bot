@@ -42,18 +42,21 @@ type ClearBitResponse struct {
 }
 
 func (j *Job) SourceLogo(db *gorm.DB) (job *Job, err error) {
-	client := &http.Client{}
-	url := fmt.Sprintf("https://autocomplete.clearbit.com/v1/companies/suggest?query=%s", url.QueryEscape(j.Company))
+	if j.Logo != "" || j.Company == "" {
+		return j, nil
+	}
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	client := &http.Client{Timeout: 10 * time.Second}
+	reqURL := fmt.Sprintf("https://autocomplete.clearbit.com/v1/companies/suggest?query=%s", url.QueryEscape(j.Company))
 
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	headers := map[string]string{
 		"User-Agent":      "Mozilla/5.0 (X11; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0",
-		"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"Accept":          "application/json",
 		"Accept-Language": "en-US,en;q=0.9",
 	}
 
@@ -62,35 +65,31 @@ func (j *Job) SourceLogo(db *gorm.DB) (job *Job, err error) {
 	}
 
 	resp, err := client.Do(req)
-
 	if err != nil {
 		return nil, err
 	}
-
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, err
 	}
 
 	var response []ClearBitResponse
-
-	err = json.Unmarshal(body, &response)
-
-	if err != nil {
+	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
 
-	if len(response) > 0 {
-		j.Logo = response[0].Logo
+	if len(response) == 0 || response[0].Logo == "" {
+		return j, nil
 	}
 
+	j.Logo = response[0].Logo
 	if db != nil {
-		return j, db.Save(j).Error
+		if err := db.Model(j).Update("logo", j.Logo).Error; err != nil {
+			return j, err
+		}
 	}
 
 	return j, nil
-
 }

@@ -300,6 +300,10 @@ func Sender(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log *zap.S
 								continue
 							}
 
+							if _, err := job.SourceLogo(db); err != nil {
+								log.Errorf("Error fetching logo for job %s: %v", job.ID, err)
+							}
+
 							msg, err := discord.ChannelMessageSendComplex(channelId, GenerateMessage(&job))
 							if err != nil {
 								if restErr, ok := err.(*discordgo.RESTError); ok && restErr.Message != nil {
@@ -474,6 +478,10 @@ func Subscriptions(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log
 							continue
 						}
 
+						if _, err := job.SourceLogo(db); err != nil {
+							log.Errorf("Error fetching logo for job %s: %v", job.ID, err)
+						}
+
 						msg, err := discord.ChannelMessageSendComplex(user_chan.ID, GenerateMessage(&job))
 						if err != nil {
 							log.Error(err)
@@ -502,25 +510,25 @@ func Subscriptions(cfg *pkg.Config, discord *discordgo.Session, db *gorm.DB, log
 }
 
 func GenerateMessage(job *models.Job) *discordgo.MessageSend {
-	return &discordgo.MessageSend{
-		Embeds: []*discordgo.MessageEmbed{
-			{
-				Title: job.Company,
-				URL:   job.ApplicationLink,
-				Color: 0x152949,
-				Thumbnail: &discordgo.MessageEmbedThumbnail{
-					URL: job.Logo,
-				},
-				Fields: []*discordgo.MessageEmbedField{
-					{Name: "Role", Value: job.Role},
-					{Name: "Location", Value: job.Location},
-				},
-				Description: fmt.Sprintf("First Seen: <t:%d:R>", job.FirstSeen.Unix()),
-				Footer: &discordgo.MessageEmbedFooter{
-					Text: fmt.Sprintf("Source: %s", job.Source),
-				},
-			},
+	embed := &discordgo.MessageEmbed{
+		Title: job.Company,
+		URL:   job.ApplicationLink,
+		Color: 0x152949,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "Role", Value: nonEmpty(job.Role, "Unknown")},
+			{Name: "Location", Value: nonEmpty(job.Location, "Unknown")},
 		},
+		Description: fmt.Sprintf("First Seen: <t:%d:R>", job.FirstSeen.Unix()),
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: fmt.Sprintf("Source: %s", job.Source),
+		},
+	}
+	if job.Logo != "" {
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: job.Logo}
+	}
+
+	return &discordgo.MessageSend{
+		Embeds: []*discordgo.MessageEmbed{embed},
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{
 				Components: []discordgo.MessageComponent{
@@ -534,4 +542,11 @@ func GenerateMessage(job *models.Job) *discordgo.MessageSend {
 			},
 		},
 	}
+}
+
+func nonEmpty(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
