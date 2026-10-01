@@ -34,6 +34,7 @@ The database is stored under `./data` on the host (created automatically). If yo
 - `/subscriptions` - View your personal subscriptions
 - `/subscribe` - Set up a new subscription
 - `/unsubscribe` - Stop receiving notifications for a specified subscription
+- `/stats` - View job listing statistics
 - `/help` - View a help menu
 
 ## Badges

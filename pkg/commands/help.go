@@ -4,7 +4,7 @@ import "github.com/bwmarrin/discordgo"
 
 func RunHelpCommand() CommandExecutor {
 	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		description := "`/subscribe` - Subscribes to job postings\n`/unsubscribe` - Unsubscribes from job postings\n`/subscriptions` - Lists your subscriptions\n`/help` - Displays this help menu"
+		description := "`/subscribe` - Subscribes to job postings\n`/unsubscribe` - Unsubscribes from job postings\n`/subscriptions` - Lists your subscriptions\n`/stats` - View Internly statistics\n`/help` - Displays this help menu"
 
 		if i.Member.Permissions&discordgo.PermissionManageChannels != 0 {
 			description += "\n`/configure` - Configures the bot"

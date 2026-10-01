@@ -157,6 +157,7 @@ func main() {
 		commands.SubscribeCommand(logger, db),
 		commands.SubscriptionsCommand(logger, db),
 		commands.UnsubscribeCommand(logger, db),
+		commands.StatsCommand(logger, db),
 		commands.HelpCommand(),
 	}
 
